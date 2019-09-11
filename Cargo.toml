@@ -1,0 +1,18 @@
+[package]
+name = "arc_cliwallet"
+version = "0.1.0"
+authors = ["Quentin Boyer <qbsecond@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+arc_libclient = { path = "../arc_libclient" }
+tokio = "0.1.22"
+simplelog = "0.7.1"
+futures = "0.1.29"
+rustyline = "5.0.2"
+log = "0.4.8"
+dirs = "2.0.2"
+base64 = "0.10.1"
+
