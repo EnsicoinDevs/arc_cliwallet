@@ -7,6 +7,28 @@ extern crate log;
 
 use rustyline::{error::ReadlineError, Editor};
 
+use std::path::PathBuf;
+use structopt::StructOpt;
+
+#[derive(Debug, StructOpt)]
+#[structopt(name = "arc_cliwallet", about = "A CLI wallet for ensicoin")]
+struct Config {
+    #[structopt(
+        long,
+        short,
+        help = "prompt history file, defaults to $HOME/.arc_cliwallet_history",
+        parse(from_os_str)
+    )]
+    pub history: Option<PathBuf>,
+    #[structopt(
+        long,
+        short,
+        help = "wallet storage, defaults to $HOME/.wallet.ron",
+        parse(from_os_str)
+    )]
+    pub storage: Option<PathBuf>,
+}
+
 fn main() {
     let (wallet, key) = Wallet::with_random_key("wallet.ron").expect("Wallet creation");
     println!("Auth key: {}", base64::encode(key.as_ref()));
