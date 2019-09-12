@@ -7,6 +7,7 @@ extern crate log;
 
 use rustyline::{error::ReadlineError, Editor};
 
+use std::io::prelude::*;
 use std::path::PathBuf;
 use structopt::StructOpt;
 
@@ -27,11 +28,49 @@ struct Config {
         parse(from_os_str)
     )]
     pub storage: Option<PathBuf>,
+    #[structopt(
+        long,
+        short,
+        help = "key to decode the wallet, can be suplied by stdin"
+    )]
+    pub key: Option<String>,
 }
 
 fn main() {
-    let (wallet, key) = Wallet::with_random_key("wallet.ron").expect("Wallet creation");
-    println!("Auth key: {}", base64::encode(key.as_ref()));
+    let config = Config::from_args();
+    let storage = match config.storage {
+        Some(s) => s,
+        None => {
+            let mut s = dirs::home_dir().expect("Home dir");
+            s.push(".wallet.ron");
+            s
+        }
+    };
+    let wallet = if storage.exists() {
+        let key = match config.key {
+            Some(k) => k,
+            None => {
+                let mut k = String::new();
+                std::io::stdin()
+                    .read_to_string(&mut k)
+                    .expect("Key input error");
+                k
+            }
+        };
+        let key = match base64::decode(&key) {
+            Ok(k) => k,
+            Err(e) => {
+                error!("Key is in invalid format: {}", e);
+                return;
+            }
+        };
+        unimplemented!()
+    } else {
+        let (wallet, key) = Wallet::with_random_key(storage).expect("Wallet creation");
+        println!("Auth key: {}", base64::encode(key.as_ref()));
+        println!("Save it to be able to access your wallet");
+        wallet
+    };
     println!("Pub key: {}", wallet.read().pub_key);
     simplelog::TermLogger::init(
         simplelog::LevelFilter::Info,
