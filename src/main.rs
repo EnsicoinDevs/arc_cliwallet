@@ -7,7 +7,6 @@ extern crate log;
 
 use rustyline::{error::ReadlineError, Editor};
 
-use std::io::prelude::*;
 use std::path::PathBuf;
 use structopt::StructOpt;
 
@@ -42,11 +41,12 @@ fn main() {
         Some(s) => s,
         None => {
             let mut s = dirs::home_dir().expect("Home dir");
-            s.push(".wallet.ron");
+            s.push(".wallet.json");
             s
         }
     };
-    let wallet = if storage.exists() {
+    let (wallet, key) = if storage.exists() {
+        println!("Loading wallet from file !");
         let key = match config.key {
             Some(k) => k,
             None => rpassword::read_password_from_tty(Some("Decryption key: "))
@@ -59,12 +59,16 @@ fn main() {
                 return;
             }
         };
-        unimplemented!()
+        (
+            Wallet::open(storage.clone(), &key).expect("Wallet loading"),
+            key,
+        )
     } else {
-        let (wallet, key) = Wallet::with_random_key(storage).expect("Wallet creation");
-        println!("Auth key: {}", base64::encode(key.as_ref()));
+        println!("Creating new wallet");
+        let (wallet, key) = Wallet::with_random_key(storage.clone()).expect("Wallet creation");
+        println!("Auth key: {}", base64::encode(&key));
         println!("Save it to be able to access your wallet");
-        wallet
+        (wallet, key)
     };
     println!("Pub key: {}", wallet.read().pub_key);
     simplelog::TermLogger::init(
@@ -73,11 +77,16 @@ fn main() {
         simplelog::TerminalMode::Mixed,
     )
     .unwrap();
+    let save_wallet = wallet.clone();
     let runner = for_balance_udpate(
         "http://localhost:4225".parse().unwrap(),
         wallet.clone(),
-        |balance| {
-            debug!("Balance update: {}", balance);
+        move |balance| {
+            info!("Balance update: {}", balance);
+            save_wallet
+                .read()
+                .save(storage.clone(), &key)
+                .expect("Could not save wallet");
             Ok(())
         },
     );
