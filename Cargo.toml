@@ -16,4 +16,5 @@ log = "0.4.8"
 dirs = "2.0.2"
 base64 = "0.10.1"
 structopt = "0.3.1"
+rpassword = "4.0.1"
 

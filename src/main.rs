@@ -49,13 +49,8 @@ fn main() {
     let wallet = if storage.exists() {
         let key = match config.key {
             Some(k) => k,
-            None => {
-                let mut k = String::new();
-                std::io::stdin()
-                    .read_to_string(&mut k)
-                    .expect("Key input error");
-                k
-            }
+            None => rpassword::read_password_from_tty(Some("Decryption key: "))
+                .expect("Error inputing password"),
         };
         let key = match base64::decode(&key) {
             Ok(k) => k,
