@@ -1,6 +1,6 @@
 use arc_libclient::{for_balance_udpate, Wallet};
 use futures::Future;
-use std::thread;
+use futures_new::FutureExt;
 
 #[macro_use]
 extern crate log;
@@ -33,9 +33,17 @@ struct Config {
         help = "key to decode the wallet, can be suplied by stdin"
     )]
     pub key: Option<String>,
+    #[structopt(
+        long,
+        short,
+        help = "gRPC address of a node",
+        default_value = "http://localhost:4225"
+    )]
+    pub address: http::Uri,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let config = Config::from_args();
     let storage = match config.storage {
         Some(s) => s,
@@ -65,7 +73,12 @@ fn main() {
         )
     } else {
         println!("Creating new wallet");
-        let (wallet, key) = Wallet::with_random_key(storage.clone()).expect("Wallet creation");
+        let (wallet, key) = futures_new::compat::Compat01As03::new(
+            Wallet::with_random_key(storage.clone(), config.address.clone())
+                .expect("Wallet creation"),
+        )
+        .await
+        .expect("Wallet initialization");
         println!("Auth key: {}", base64::encode(&key));
         println!("Save it to be able to access your wallet");
         (wallet, key)
@@ -78,23 +91,21 @@ fn main() {
     )
     .unwrap();
     let save_wallet = wallet.clone();
-    let runner = for_balance_udpate(
-        "http://localhost:4225".parse().unwrap(),
-        wallet.clone(),
-        move |balance| {
-            info!("Balance update: {}", balance);
-            save_wallet
-                .read()
-                .save(storage.clone(), &key)
-                .expect("Could not save wallet");
-            Ok(())
-        },
-    );
+    let runner = for_balance_udpate(config.address, wallet.clone(), move |balance| {
+        info!("Balance update: {}", balance);
+        save_wallet
+            .read()
+            .save(storage.clone(), &key)
+            .expect("Could not save wallet");
+        Ok(())
+    });
 
-    thread::Builder::new()
-        .name("Updater".to_owned())
-        .spawn(|| tokio::run(runner.map_err(|e| eprintln!("Fatal error: {:?}", e))))
-        .expect("Balance updater failed");
+    tokio::spawn(
+        futures_new::compat::Compat01As03::new(
+            runner.map_err(|e| eprintln!("Fatal error: {:?}", e)),
+        )
+        .map(|_| ()),
+    );
 
     let mut rl = Editor::<()>::new();
     if let Some(mut home) = dirs::home_dir() {
