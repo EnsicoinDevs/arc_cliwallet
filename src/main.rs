@@ -1,6 +1,5 @@
 use arc_libclient::{for_balance_udpate, Wallet};
 use futures::Future;
-use futures_new::FutureExt;
 
 #[macro_use]
 extern crate log;
@@ -42,8 +41,7 @@ struct Config {
     pub address: http::Uri,
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let config = Config::from_args();
     let storage = match config.storage {
         Some(s) => s,
@@ -53,7 +51,7 @@ async fn main() {
             s
         }
     };
-    let (wallet, key) = if storage.exists() {
+    if storage.exists() {
         println!("Loading wallet from file !");
         let key = match config.key {
             Some(k) => k,
@@ -67,22 +65,29 @@ async fn main() {
                 return;
             }
         };
-        (
+        run(
             Wallet::open(storage.clone(), &key).expect("Wallet loading"),
+            config.address,
             key,
-        )
+            storage,
+        );
     } else {
         println!("Creating new wallet");
-        let (wallet, key) = futures_new::compat::Compat01As03::new(
-            Wallet::with_random_key(storage.clone(), config.address.clone())
-                .expect("Wallet creation"),
-        )
-        .await
-        .expect("Wallet initialization");
-        println!("Auth key: {}", base64::encode(&key));
-        println!("Save it to be able to access your wallet");
-        (wallet, key)
+        let address = config.address;
+        tokio::run(
+            Wallet::with_random_key(storage.clone(), address.clone())
+                .expect("Wallet creation")
+                .and_then(|(wallet, key)| {
+                    println!("Auth key: {}", base64::encode(&key));
+                    println!("Save it to be able to access your wallet");
+                    Ok(run(wallet, address, key, storage))
+                })
+                .map_err(|e| error!("Error running wallet: {:?}", e)),
+        );
     };
+}
+
+fn run(wallet: arc_libclient::Data, address: http::Uri, key: Vec<u8>, storage: std::path::PathBuf) {
     println!("Pub key: {}", wallet.read().pub_key);
     simplelog::TermLogger::init(
         simplelog::LevelFilter::Info,
@@ -91,7 +96,7 @@ async fn main() {
     )
     .unwrap();
     let save_wallet = wallet.clone();
-    let runner = for_balance_udpate(config.address, wallet.clone(), move |balance| {
+    let runner = for_balance_udpate(address, wallet.clone(), move |balance| {
         info!("Balance update: {}", balance);
         save_wallet
             .read()
@@ -100,12 +105,22 @@ async fn main() {
         Ok(())
     });
 
-    tokio::spawn(
-        futures_new::compat::Compat01As03::new(
-            runner.map_err(|e| eprintln!("Fatal error: {:?}", e)),
-        )
-        .map(|_| ()),
-    );
+    std::thread::Builder::new()
+        .name("Runner".to_owned())
+        .spawn(|| {
+            let mut runtime = tokio::runtime::current_thread::Runtime::new().unwrap();
+            let handle = runtime.handle();
+            std::thread::spawn(move || {
+                handle
+                    .spawn(runner.map_err(|e| eprintln!("Fatal error: {:?}", e)))
+                    .expect("Spawning on handle failed");
+            })
+            .join()
+            .expect("Runner thread failed");
+
+            runtime.run().expect("Runner runtime failed");
+        })
+        .expect("Other tokio failed");
 
     let mut rl = Editor::<()>::new();
     if let Some(mut home) = dirs::home_dir() {

@@ -9,8 +9,9 @@ edition = "2018"
 [dependencies]
 # arc_libclient = { git = "https://github.com/EnsicoinDevs/arc_libclient" }
 arc_libclient = { path = "../arc_libclient" }
-futures_new = {version = "0.3.0-alpha.13", package = "futures-preview", features = ["compat"]}
-tokio = "0.2.0-alpha.5"
+# futures_new = {version = "0.3.0-alpha.13", package = "futures-preview", features = ["compat"]}
+# tokio = "0.2.0-alpha.5"
+tokio = "0.1"
 simplelog = "0.7.1"
 futures = "0.1.29"
 rustyline = "5.0.2"
@@ -20,4 +21,3 @@ base64 = "0.10.1"
 structopt = "0.3.1"
 rpassword = "4.0.1"
 http = "0.1.18"
-
