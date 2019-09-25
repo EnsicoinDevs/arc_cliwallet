@@ -6,12 +6,17 @@ extern crate log;
 
 use rustyline::{error::ReadlineError, Editor};
 
+mod prompt;
+use prompt::{Command, CommandError};
+
 use std::path::PathBuf;
 use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "arc_cliwallet", about = "A CLI wallet for ensicoin")]
 struct Config {
+    #[structopt(long)]
+    pub debug: bool,
     #[structopt(
         long,
         short,
@@ -43,6 +48,16 @@ struct Config {
 
 fn main() {
     let config = Config::from_args();
+    simplelog::TermLogger::init(
+        if config.debug {
+            simplelog::LevelFilter::Debug
+        } else {
+            simplelog::LevelFilter::Info
+        },
+        simplelog::Config::default(),
+        simplelog::TerminalMode::Mixed,
+    )
+    .unwrap();
     let storage = match config.storage {
         Some(s) => s,
         None => {
@@ -87,17 +102,34 @@ fn main() {
     };
 }
 
+fn spawn_a_future<F: Future<Item = (), Error = ()> + Send + 'static>(
+    future: F,
+    name: Option<String>,
+) -> Result<(), std::io::Error> {
+    std::thread::Builder::new()
+        .name(match name {
+            Some(n) => format!("{} runner", n),
+            None => "Future runner".to_owned(),
+        })
+        .spawn(move || {
+            let mut runtime = tokio::runtime::current_thread::Runtime::new().unwrap();
+            let handle = runtime.handle();
+            std::thread::spawn(move || {
+                handle.spawn(future).expect("Spawning on handle failed");
+            })
+            .join()
+            .expect("Runner thread failed");
+
+            runtime.run().expect("Runner runtime failed");
+        })
+        .map(|_| ())
+}
+
 fn run(wallet: arc_libclient::Data, address: http::Uri, key: Vec<u8>, storage: std::path::PathBuf) {
     println!("Pub key: {}", wallet.read().pub_key);
-    simplelog::TermLogger::init(
-        simplelog::LevelFilter::Info,
-        simplelog::Config::default(),
-        simplelog::TerminalMode::Mixed,
-    )
-    .unwrap();
     let save_wallet = wallet.clone();
-    let runner = for_balance_udpate(address, wallet.clone(), move |balance| {
-        info!("Balance update: {}", balance);
+    let runner = for_balance_udpate(address.clone(), wallet.clone(), move |balance| {
+        debug!("Balance update: {}", balance);
         save_wallet
             .read()
             .save(storage.clone(), &key)
@@ -105,22 +137,11 @@ fn run(wallet: arc_libclient::Data, address: http::Uri, key: Vec<u8>, storage: s
         Ok(())
     });
 
-    std::thread::Builder::new()
-        .name("Runner".to_owned())
-        .spawn(|| {
-            let mut runtime = tokio::runtime::current_thread::Runtime::new().unwrap();
-            let handle = runtime.handle();
-            std::thread::spawn(move || {
-                handle
-                    .spawn(runner.map_err(|e| eprintln!("Fatal error: {:?}", e)))
-                    .expect("Spawning on handle failed");
-            })
-            .join()
-            .expect("Runner thread failed");
-
-            runtime.run().expect("Runner runtime failed");
-        })
-        .expect("Other tokio failed");
+    spawn_a_future(
+        runner.map_err(|e| eprintln!("Fatal error: {:?}", e)),
+        Some("balance update".to_owned()),
+    )
+    .expect("spawning balance updater failed");
 
     let mut rl = Editor::<()>::new();
     if let Some(mut home) = dirs::home_dir() {
@@ -135,9 +156,33 @@ fn run(wallet: arc_libclient::Data, address: http::Uri, key: Vec<u8>, storage: s
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
                 let line = line.trim();
-                match line {
-                    "balance" => println!("Balance: {}", wallet.read().balance()),
-                    _ => eprintln!("Unknown command"),
+                match line.parse() {
+                    Ok(Command::Balance) => println!("Balance: {}", wallet.read().balance()),
+                    Ok(Command::Pubkey) => println!("Public key: {}", wallet.read().pub_key),
+                    Ok(Command::Help) => {
+                        println!("\thelp: prints this help");
+                        println!("\tbalance: prints the balance");
+                        println!("\tpubkey: prints the public key");
+                        println!("\tpay <value> <public_key>:pay value XEC to the public_key");
+                    }
+                    Ok(Command::Pay { value, to }) => {
+                        spawn_a_future(
+                            arc_libclient::pay_to(address.clone(), wallet.clone(), value, &to)
+                                .expect("creating payment")
+                                .map_err(|e| error!("Error in payment: {:?}", e))
+                                .map(|_| ()),
+                            Some(format!("payment to {}", to)),
+                        )
+                        .expect("Payment thread");
+                    }
+                    Err(CommandError::NoCommand) => (),
+                    Err(CommandError::ArgumentCount { expected: n }) => {
+                        eprintln!("Expected {} arguments", n)
+                    }
+                    Err(CommandError::InvalidArgument { message }) => {
+                        eprintln!("Invalid argument: {}", message)
+                    }
+                    Err(CommandError::UnknownCommand) => eprintln!("Unknown command"),
                 }
             }
             Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => {
